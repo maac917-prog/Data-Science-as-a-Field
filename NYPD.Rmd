@@ -1,0 +1,96 @@
+---
+title: "NYPD Shooting Analysis"
+output: pdf_document
+date: "2026-02-27"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+library(htmlwidgets)
+library(webshot2)
+library(forecast)
+```
+
+Unfortunately, the endpoint API calls from the website are not currently functional and result in a 403 error. On top of that, it appears that the original data set has also been deleted. So, for this project I had to read in two different data sets from a local download to perform analysis. In the comments is how one would perform the read in with the endpoint API link, in case it ever does work again.
+I uploaded the local downloads to my github account and use those links instead for reproducibilty purposes.
+
+```{r read_data}
+#incidents <- read_csv("https://data.cityofnewyork.us/api/v3/views/98wc-x49t/query.csv")
+
+#shooting_offenders <- read_csv("https://data.cityofnewyork.us/api/v3/views/gdk4-mbsv/query.csv")
+
+shooting_offenders <- read_csv("https://github.com/maac917-prog/Data-Science-as-a-Field/raw/main/Shooting_Offenders_(2006-Present)_20260228.csv", show_col_types = FALSE)
+
+incidents <- read_csv("https://github.com/maac917-prog/Data-Science-as-a-Field/raw/main/ARCHIVED_NYPD_Shooting_Incident_Data_(Year_To_Date)_20260228.csv", show_col_types = FALSE)
+```
+
+Now to tidy up the data. I need to join the data sets in order to replicate what the original historic data set looked like. I am also tidying up the timestamp for future analysis.
+
+```{r tidy_data}
+incidents <- incidents %>%
+  select(-c(X_COORD_CD, Y_COORD_CD, `New Georeferenced Column`))
+
+nypd_shooting <- full_join(incidents, shooting_offenders)
+
+nypd_shooting <- nypd_shooting %>%
+  mutate(
+    occur_timestamp = mdy(OCCUR_DATE) + hms(OCCUR_TIME),
+    hour = hour(occur_timestamp),
+    Latitude = as.numeric(Latitude),
+    Longitude = as.numeric(Longitude)
+  ) %>%
+  filter(!is.na(Latitude), !is.na(Longitude))
+```
+
+Summary of the data
+```{r summary}
+summary(nypd_shooting)
+```
+
+
+For my visualizations, I wanted to see where and when in NY it was the most dangerous. To start, I created a bar graph showing the number of shootings in each hour of the day in NY.
+
+```{r visual_one}
+ggplot(nypd_shooting, aes(x = hour)) +
+  geom_bar(fill = "firebrick") +
+  labs(title = "NYPD Shooting Incidents by Hour",
+       x = "Hour", y = "Number of Incidents") +
+  theme_minimal()
+```
+
+Result: The graph clearly shows a drop off of shootings between the hours of 0400 - 1200, with the highest number of shootings happening at 2100.
+
+The next visualization looks at dangerous locations within NY. In order to knit to pdf, I screen captured the html map for a static view.
+
+```{r visual_two}
+m <- leaflet(nypd_shooting) %>%
+  addTiles() %>%
+  setView(lat = 40.7128, lng = -74.0060, zoom = 11) %>% 
+    addMarkers(
+    lng = ~Longitude, lat = ~Latitude,
+    clusterOptions = markerClusterOptions()
+  )
+
+saveWidget(m, "temp_map.html", selfcontained = FALSE)
+
+webshot("temp_map.html", file = "nypd_snapshot.png", cliprect = "viewport")
+```
+
+Result: From this map you can clearly see the highest areas of shooting crimes within NY. Brooklyn and right along the Manhattan and Bronx border. This information could be used for anyone looking to move to NY and determining the safest neighborhood for them.
+
+For my model I chose to investigate if the Borough or the time of the shooting were statistically significant predictors on if the shooting was fatal.
+```{r model}
+model_data <- nypd_shooting %>%
+  mutate(is_fatal = ifelse(STATISTICAL_MURDER_FLAG == "Y", 1, 0))
+
+fatal <- glm(is_fatal ~ BORO + hour(hms(OCCUR_TIME)), 
+                 data = model_data, family = "binomial")
+
+summary(fatal)
+```
+
+Results: From these results, it appears neither hour nor borough is statistically significant to predict if a shooting will be fatal or not. This is interesting considering the volume difference between the boroughs.It does show that there is roughly a 20% fatality rate for shooting in NY.
+
+Bias: Bias could come from what is considered a shooting or not. There will exist gun violence where the shot does not hit a person and therefore is not included in this data set, but would have a large impact on what areas are considered dangerous. There could also be missing data from lack of reporting, there could be skewed data from higher police presence in one area over another. There is bias that comes from me the analyst because I am not familiar with NY to understand and mitigate the impact of missing data. So for example, I do not know where there is a higher police presence or not, to be able to focus on an area of NY that is more likely to be accurately counted.
